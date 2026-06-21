@@ -1,0 +1,37 @@
+{
+  "name": "hnraytek/flame-module-kernel",
+  "description": "A declarative, auto-discovering, event-driven module kernel for PHP 8+/一款 php 8+ 的声明式、自动发现、事件驱动的模块内核",
+  "type": "library",
+  "keywords": [
+    "thinkphp",
+    "buildadmin",
+    "flame",
+    "module",
+    "kernel"
+  ],
+  "authors": [
+    {
+      "name": "haoshuaioo",
+      "email": "bbmu@qq.com"
+    }
+  ],
+  "require": {
+    "php": ">=8.1",
+    "topthink/framework": "^6.0 || ^8.0",
+    "topthink/think-helper": "^3.0.3",
+    "symfony/var-exporter": "^6.4"
+  },
+  "license": "Apache-2.0",
+  "autoload": {
+    "psr-4": {
+      "Flame\\": "src/"
+    }
+  },
+  "extra": {
+    "think": {
+      "services": [
+        "Flame\\ModuleService"
+      ]
+    }
+  }
+}
