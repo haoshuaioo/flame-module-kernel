@@ -31,7 +31,7 @@ abstract class BaseModuleService
         protected App $app
     )
     {
-        $this->configManager = new ConfigManager($app, $this->name);
+        $this->configManager = ConfigManager::instance($app, $this->name);
         $this->initialize();
     }
 

@@ -27,11 +27,16 @@ class FileHelper
 
         $tempFile = $file . '.tmp.' . uniqid();
 
-        if (file_put_contents($tempFile, $content) === false) {
+        if (!@file_put_contents($tempFile, $content, LOCK_EX)) {
+            @unlink($tempFile);
             return false;
         }
 
-        return rename($tempFile, $file);
+        if (!@rename($tempFile, $file)) {
+            @unlink($tempFile);
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -70,6 +75,90 @@ class FileHelper
     }
 
     /**
+     * 归一化排除规则
+     *
+     * 支持普通目录名（tests）、通配符（test*）和正则（/^test(s)?$/i）三种写法，
+     * 统一转换为正则表达式，避免配置普通文本时 preg_match 报错导致排除失效。
+     * 方法幂等，归一化结果可重复传入。
+     *
+     * @param array $patterns 原始排除规则
+     * @return array 归一化后的正则列表
+     */
+    public static function normalizeExcludePatterns(array $patterns): array
+    {
+        $normalized = [];
+
+        foreach ($patterns as $pattern) {
+            if (!is_string($pattern)) {
+                continue;
+            }
+
+            $pattern = trim($pattern);
+            if ($pattern === '') {
+                continue;
+            }
+
+            $normalized[] = self::normalizeExcludePattern($pattern);
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    /**
+     * 归一化单个排除规则
+     *
+     * @param string $pattern 原始规则
+     * @return string 归一化后的正则
+     */
+    public static function normalizeExcludePattern(string $pattern): string
+    {
+        $pattern = trim($pattern);
+
+        if (self::isRegexPattern($pattern)) {
+            return $pattern;
+        }
+
+        // 普通文本按字面量匹配，同时支持 * 与 ? 通配符
+        $quoted = preg_quote($pattern, '/');
+        $quoted = str_replace(['\*', '\?'], ['.*', '.'], $quoted);
+
+        return '/^' . $quoted . '$/i';
+    }
+
+    /**
+     * 判断是否为合法的正则表达式（含分隔符与修饰符）
+     */
+    private static function isRegexPattern(string $pattern): bool
+    {
+        if ($pattern === '') {
+            return false;
+        }
+
+        $delimiter = $pattern[0];
+
+        // 分隔符必须是可打印的 ASCII 非字母数字字符（排除多字节首字节、空白与反斜杠）
+        $ord = ord($delimiter);
+        if ($ord < 0x21 || $ord > 0x7e || $delimiter === '\\' || ctype_alnum($delimiter)) {
+            return false;
+        }
+
+        $end = strrpos($pattern, $delimiter);
+
+        // 分隔符必须成对出现
+        if ($end === false || $end === 0) {
+            return false;
+        }
+
+        // 结束分隔符之后只允许出现修饰符
+        $modifiers = substr($pattern, $end + 1);
+        if ($modifiers !== '' && !preg_match('/^[a-zA-Z]*$/', $modifiers)) {
+            return false;
+        }
+
+        return @preg_match($pattern, '') !== false;
+    }
+
+    /**
      * 检查路径是否在排除目录中
      *
      * @param string $filePath 文件完整路径
@@ -91,12 +180,17 @@ class FileHelper
         array_pop($pathParts); // 移除文件名
 
         foreach ($pathParts as $part) {
-            if (empty($part)) {
+            if ($part === '') {
                 continue;
             }
 
             foreach ($excludePatterns as $pattern) {
-                if (preg_match($pattern, $part)) {
+                if (!is_string($pattern) || $pattern === '') {
+                    continue;
+                }
+
+                // 未归一化的非法正则返回 false，这里用 === 1 精确判定，并抑制 Warning
+                if (@preg_match($pattern, $part) === 1) {
                     return true;
                 }
             }

@@ -29,7 +29,8 @@ class ModuleScanner
     {
         $this->modulePath = realpath($modulePath) ?: $modulePath;
         $this->namespace = $namespace;
-        $this->excludeDirs = $excludeDirs;
+        // 归一化保证不同入口传入的普通文本同样有效
+        $this->excludeDirs = FileHelper::normalizeExcludePatterns($excludeDirs);
     }
 
     /**

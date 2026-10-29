@@ -116,6 +116,7 @@ class UserService extends BaseService
 3. 开启事务（仅 transaction），执行业务闭包
 4. 提交事务（仅 transaction）
 5. 触发 `after.{eventName}` 事件（失败只记录日志）
+6. 业务闭包返回值会合并进结果容器；数组与已有结果浅合并，非数组直接作为结果
 
 ## 🎮 BaseApiController - 控制器基类
 

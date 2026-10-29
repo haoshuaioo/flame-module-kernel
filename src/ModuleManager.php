@@ -30,6 +30,22 @@ class ModuleManager
     const LOG_WARNING = 'warning';
     const LOG_INFO = 'info';
 
+    // 默认排除目录，用户配置在此基础上追加
+    const DEFAULT_EXCLUDE_DIRS = [
+        '/^test(s)?$/i',
+        '/^example(s)?$/i',
+        '/^demo(s)?$/i',
+        '/^doc(s)?$/i',
+        '/^vendor$/',
+        '/^node_modules$/',
+        '/^\.git$/',
+        '/^\.idea$/',
+        '/^\.vscode$/',
+        '/^\.svn$/',
+        '/^build$/',
+        '/^dist$/',
+    ];
+
     /**
      * @var array 配置项
      */
@@ -91,23 +107,12 @@ class ModuleManager
         protected Route $router
     )
     {
-        $defaultExcludeDirs = [
-            '/^test(s)?$/i',
-            '/^example(s)?$/i',
-            '/^demo(s)?$/i',
-            '/^doc(s)?$/i',
-            '/^vendor$/',
-            '/^node_modules$/',
-            '/^\.git$/',
-            '/^\.idea$/',
-            '/^\.vscode$/',
-            '/^\.svn$/',
-            '/^build$/',
-            '/^dist$/',
-        ];
-
         $userConfig = $app->config->get('flame', []);
-        $mergedExcludeDirs = array_unique(array_merge($defaultExcludeDirs, $userConfig['exclude_dirs'] ?? []));
+
+        // 归一化：普通目录名/通配符统一转成正则，同时兼容 exclude_dirs 传入字符串的写法
+        $mergedExcludeDirs = FileHelper::normalizeExcludePatterns(
+            array_merge(self::DEFAULT_EXCLUDE_DIRS, (array)($userConfig['exclude_dirs'] ?? []))
+        );
 
         $this->config = array_merge([
             // 模块路径，默认为 FlameModule
@@ -171,11 +176,14 @@ class ModuleManager
         // 尝试加载缓存
         $cacheData = $this->cacheManager->load();
 
-        if ($cacheData && !$this->cacheManager->shouldRefresh(
+        if ($cacheData
+            && !$this->cacheManager->shouldRefresh(
                 $this->config['hot_update'] ?? false,
                 $this->config['module_path'],
                 $this->config['exclude_dirs']
-            )) {
+            )
+            && !$this->isFlameConfigNewerThanCache()
+        ) {
             // 使用缓存
             $this->log("[FlameModule] 缓存加载成功");
         } else {
@@ -285,11 +293,12 @@ class ModuleManager
     {
         $this->cacheManager->clear();
         $this->cacheManager->resetTimestamp();
-        $this->loaded = false;
 
         $scanResult = $this->scanner->scan();
         $this->cacheManager->save($scanResult);
-        $this->loaded = true;
+
+        // 索引需基于新缓存重建，等下次访问时重新加载
+        $this->loaded = false;
 
         return $scanResult['modules'];
     }
@@ -300,13 +309,44 @@ class ModuleManager
     public function saveConfig(array $config = []): void
     {
         $configFile = config_path() . 'flame.php';
+
+        $before = $this->getScanConfig();
+
         $this->config = array_merge($this->config, $config);
+        $this->config['exclude_dirs'] = FileHelper::normalizeExcludePatterns(
+            array_merge(self::DEFAULT_EXCLUDE_DIRS, (array)($this->config['exclude_dirs'] ?? []))
+        );
+
         $this->app->config->set($this->config, 'flame');
 
         $content = "<?php\nreturn " . VarExporter::export($this->config) . ";";
         if (!FileHelper::atomicWrite($configFile, $content)) {
             $this->log("[FlameModule] 配置保存失败", self::LOG_WARNING);
         }
+
+        // 扫描规则变化：重建扫描器并清扫描缓存，避免同进程沿用旧规则写出错误缓存
+        if ($before !== $this->getScanConfig()) {
+            $this->scanner = new ModuleScanner(
+                $this->config['module_path'],
+                $this->config['namespace'],
+                $this->config['exclude_dirs']
+            );
+            $this->cacheManager->clear();
+            $this->cacheManager->resetTimestamp();
+            $this->loaded = false;
+        }
+    }
+
+    /**
+     * 提取影响扫描结果的配置，用于变更比对
+     */
+    protected function getScanConfig(): array
+    {
+        return [
+            'module_path' => $this->config['module_path'] ?? '',
+            'namespace' => $this->config['namespace'] ?? '',
+            'exclude_dirs' => $this->config['exclude_dirs'] ?? [],
+        ];
     }
 
     /**
@@ -443,6 +483,23 @@ class ModuleManager
     {
         $this->ensureLoaded();
         return $this->routeQuery->getCurrentRouteAttribute($attributeClass, $default);
+    }
+
+    /**
+     * 判断全局配置 config/flame.php 是否比扫描缓存更新
+     *
+     * exclude_dirs / module_path / namespace 都在此文件中，
+     * 文件比缓存新说明扫描规则可能变化，需要重建缓存。
+     */
+    protected function isFlameConfigNewerThanCache(): bool
+    {
+        $timestamp = $this->cacheManager->getTimestamp();
+        if ($timestamp <= 0) {
+            return false;
+        }
+
+        $configFile = config_path() . 'flame.php';
+        return is_file($configFile) && filemtime($configFile) > $timestamp;
     }
 
     /**

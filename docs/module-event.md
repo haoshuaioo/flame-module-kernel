@@ -141,7 +141,7 @@ class UserCreateListener
     public function onAfterUserCreate(ModuleEvent $event)
     {
         $result = $event->getResult();
-        $userId = $result['user_id'] ?? null;
+        $userId = is_array($result) ? $result['user_id'] ?? null ? null;
         
         if ($userId) {
             // 发送邮件...
@@ -179,10 +179,11 @@ class UserCreateListener
 ### 使用建议
 
 1. **数据传输**：使用 `getData()`/`setData()` 在监听器和业务逻辑间传递数据
-2. **结果累积**：使用 `mergeResult()` 在后置监听器中累积处理结果
-3. **流程控制**：在前置监听器中使用 `abort()` 进行权限校验或数据验证
-4. **用户追踪**：使用 `setUserId()` 记录操作用户，便于审计
-5. **时间戳**：使用 `getOccurredAt()` 获取事件发生的精确时间
+2. **结果管理**：`result`/`data` 都是通讯容器，任何环节可读写，最终以容器内容为准
+3. **结果累积**：使用 `mergeResult()` 在后置监听器中累积处理结果
+4. **流程控制**：在前置监听器中使用 `abort()` 进行权限校验或数据验证
+5. **用户追踪**：使用 `setUserId()` 记录操作用户，便于审计
+6. **时间戳**：使用 `getOccurredAt()` 获取事件发生的精确时间
 
 ## 🔗 相关文档
 

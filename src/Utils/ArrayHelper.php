@@ -74,11 +74,11 @@ class ArrayHelper
      * @param array $array2 新数组
      * @return array 合并后的数组
      */
-    static public function arrayMergeOverwrite(array $array1, array &$array2): array
+    static public function arrayMergeOverwrite(array $array1, array $array2): array
     {
         $merged = $array1;
 
-        foreach ($array2 as $key => &$value) {
+        foreach ($array2 as $key => $value) {
             if (is_array($value) && isset($merged[$key]) && is_array($merged[$key])) {
                 $merged[$key] = self::arrayMergeOverwrite($merged[$key], $value);
             } else {

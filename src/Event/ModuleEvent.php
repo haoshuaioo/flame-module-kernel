@@ -19,12 +19,10 @@ class ModuleEvent
     /** @var int|null 相关用户ID（可选） */
     protected ?int $userId = null;
 
-    /** @var array 额外数据（可被监听器修改），前置事件可以修改的数据，用于业务操作 */
+    /** @var array 额外数据容器，任意环节可读写，值为任意类型 */
     protected array $data = [];
 
-    /**
-     * @var mixed 用于最终返回值，BaseModuleService::execute 中 business 返回数据
-     */
+    /** @var mixed 结果容器，任意环节可读写，可为任意类型；null 表示尚未写入 */
     protected mixed $result = null;
 
     /**
@@ -83,45 +81,67 @@ class ModuleEvent
 
     /**
      * 获取数据
+     *
+     * 获取值时请使用 get，1.0.0 版本暂时保持兼容，后续废弃
      * @param string|null $key （支持点号分隔，如 'user.profile.address'）
-     * @param $default
-     * @return array|mixed|null
+     * @param mixed $default
+     * @return mixed
      */
-    public function getData(string $key = null, $default = null): mixed
+    public function getData(?string $key = null, mixed $default = null): mixed
     {
         if ($key === null) {
             return $this->data;
         }
+
         return ArrayHelper::getNestedValue($this->data, $key, $default);
     }
 
     /**
-     * 设置数据（覆盖）
+     * 设置数据（整体覆盖）
+     *
      * @param array $data
      * @return $this
      */
     public function setData(array $data = []): self
     {
-        $this->data = $data ?? [];
+        $this->data = $data;
         return $this;
     }
 
     /**
-     * 设置数据
+     * 获取数据
+     *
      * @param string|null $key （支持点号分隔，如 'user.profile.address'）
-     * @param $default
+     * @param mixed $default
+     * @return mixed
+     */
+    public function get(?string $key = null, mixed $default = null): mixed
+    {
+        if (empty($key)) return $default;
+
+        return ArrayHelper::getNestedValue($this->data, $key, $default);
+    }
+
+    /**
+     * 设置数据（点号嵌套写入）
+     *
+     * @param string|null $key （支持点号分隔，如 'user.profile.address'）
+     * @param mixed $value
      * @return $this
      */
-    public function set(string $key = null, $default = null): self
+    public function set(?string $key = null, mixed $value = null): self
     {
-        $currentData = $this->getData();
-        $newData = ArrayHelper::setNestedValue($currentData, $key, $default);
-        $this->setData($newData);
+        if (empty($key)) return $this;
+
+        $this->data = ArrayHelper::setNestedValue($this->data, $key, $value);
         return $this;
     }
 
     /**
-     * 获取业务结果
+     * 获取结果（任意类型：数组/标量/对象/null）
+     *
+     * 注意：数组结果是拷贝，就地修改无效，请用 setResult()/mergeResult*()/setResultData()
+     *
      * @return mixed
      */
     public function getResult(): mixed
@@ -130,7 +150,8 @@ class ModuleEvent
     }
 
     /**
-     * 设置业务结果，覆盖 result
+     * 直接替换结果（任意类型，不做任何数组处理）
+     *
      * @param mixed $result
      * @return $this
      */
@@ -141,61 +162,97 @@ class ModuleEvent
     }
 
     /**
-     * 设置结果数据，支持
-     * @param string|array $key 配置建（支持点号分隔，如 'user.profile.age'）
-     * @param mixed|null $value 配置值（当 $key 为字符串时有效）
+     * 写入结果，按参数区分语义：
+     *
+     * - setResult(array $data)           数组：浅合并进结果（数组语义）
+     * - setResult(mixed $value)          单参数且非数组：直接作为结果（任意类型）
+     * - setResult(string $key, $value)   双参数：点号嵌套写入，结果强制为数组
+     *
+     * @param mixed $key 数组 / 结果值 / 字符串键（双参数模式）
+     * @param mixed $value 键值（双参数模式）
      * @return $this
      */
-    public function setResult(string|array $key, mixed $value = null): self
+    public function setResult(mixed $key, mixed $value = null): self
     {
-        $currentResult = $this->getResult() ?? [];
+        // 数组：走数组语义（浅合并）
         if (is_array($key)) {
-            $result = array_merge($currentResult, $key);
-        } else {
-            $result = ArrayHelper::setNestedValue($currentResult, $key, $value);
+            if (func_num_args() > 1) {
+                throw new \InvalidArgumentException('setResult() 数组模式只接受一个参数');
+            }
+
+            return $this->mergeResult($key);
         }
-        $this->setResultData($result);
+
+        // 单参数：直接作为结果（任意类型）
+        if (func_num_args() === 1) {
+            return $this->setResultData($key);
+        }
+
+        // 双参数：键值写入
+        if (!is_string($key) || $key === '') {
+            throw new \InvalidArgumentException(
+                'setResult() 双参数写入时，第一个参数必须是非空字符串键，实际为 ' . get_debug_type($key)
+            );
+        }
+
+        $this->result = ArrayHelper::setNestedValue($this->resultAsArray(), $key, $value);
         return $this;
     }
 
     /**
-     * 合并追加结果数据
-     * @param array $data 要追加的数据
-     * @return self
+     * 浅合并结果（同键覆盖，数字键追加）；结果强制为数组
+     *
+     * @param array $data
+     * @return $this
      */
     public function mergeResult(array $data): self
     {
-        $currentResult = $this->getResult() ?? [];
-        $newResult = array_merge($currentResult, $data);
-        $this->setResult($newResult);
+        // 空数组直接返回，避免把已有的非数组结果（如 ID）清成 []
+        if (!$data) return $this;
+
+        $this->result = array_merge($this->resultAsArray(), $data);
         return $this;
     }
 
     /**
-     * 深度合并结果数据，相同数据合并为数组
-     * @param array $data 要追加的数据
-     * @return self
+     * 深度合并结果（相同键合并为数组）；结果强制为数组
+     *
+     * @param array $data
+     * @return $this
      */
     public function mergeResultRecursive(array $data): self
     {
-        $currentResult = $this->getResult() ?? [];
-        $newResult = array_merge_recursive($currentResult, $data);
-        $this->setResult($newResult);
+        if (!$data) return $this;
+
+        $this->result = array_merge_recursive($this->resultAsArray(), $data);
         return $this;
     }
 
     /**
-     * 深度合并数据，覆盖相同数据
+     * 深度合并结果（相同键用新值覆盖；列表按下标覆盖，不截断旧元素）；结果强制为数组
+     *
+     * "覆盖"是键级/下标级覆盖：['a','b'] + ['c'] → ['c','b']。
+     * 要整体替换请用 setResultData()。
+     *
      * @param array $data
      * @return $this
      */
     public function mergeResultOverwrite(array $data): self
     {
-        $currentData = $this->getData();
-        $newData = $data;
-        $newResult = ArrayHelper::arrayMergeOverwrite($currentData, $newData);
-        $this->setResult($newResult);
+        if (!$data) return $this;
+
+        $this->result = ArrayHelper::arrayMergeOverwrite($this->resultAsArray(), $data);
         return $this;
+    }
+
+    /**
+     * 将当前结果视为数组（非数组一律视为空数组）
+     *
+     * @return array
+     */
+    private function resultAsArray(): array
+    {
+        return is_array($this->result) ? $this->result : [];
     }
 
     /**
